@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="lt">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pasiekimų žingsneliai – vaiko pasiekimų žymėjimas</title>
+<style>
+  :root { --accent: #2b5ea7; --border: #d0d5dd; --bg: #f4f6f9; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Segoe UI", Arial, sans-serif; background: var(--bg); color: #1f2933; }
+  header {
+    position: sticky; top: 0; z-index: 10; background: #fff; border-bottom: 1px solid var(--border);
+    padding: 10px 16px; display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center;
+    box-shadow: 0 2px 6px rgba(0,0,0,.05);
+  }
+  h1 { font-size: 18px; margin: 0; color: var(--accent); white-space: nowrap; }
+  .group { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .group > .lbl { font-size: 13px; color: #52606d; }
+  input[type=text], input[type=date] {
+    font: inherit; font-size: 14px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px;
+  }
+  input[type=text] { width: 150px; }
+  .swatch {
+    width: 26px; height: 26px; border-radius: 50%; border: 2px solid #fff; cursor: pointer;
+    box-shadow: 0 0 0 1px var(--border); padding: 0;
+  }
+  .swatch.active { box-shadow: 0 0 0 2px #1f2933; }
+  input[type=color] { width: 34px; height: 30px; border: none; padding: 0; background: none; cursor: pointer; }
+  select { font: inherit; font-size: 14px; padding: 5px; border: 1px solid var(--border); border-radius: 6px; }
+  button.btn {
+    font: inherit; font-size: 14px; padding: 7px 12px; border-radius: 6px; cursor: pointer;
+    border: 1px solid var(--border); background: #fff;
+  }
+  button.btn:hover { background: #eef2f7; }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button.primary:hover { background: #224b86; }
+  .tabs { display: flex; gap: 6px; padding: 12px 16px 0; }
+  .tab {
+    font: inherit; font-size: 15px; padding: 8px 16px; border: 1px solid var(--border); border-bottom: none;
+    border-radius: 8px 8px 0 0; background: #e6eaf0; cursor: pointer;
+  }
+  .tab.active { background: #fff; font-weight: 600; color: var(--accent); }
+  .tab .cnt { font-size: 12px; color: #fff; background: var(--accent); border-radius: 10px; padding: 1px 7px; margin-left: 6px; }
+  .sheet-wrap { background: #fff; margin: 0 16px 16px; padding: 12px; border: 1px solid var(--border); border-radius: 0 8px 8px 8px; }
+  .sheet { position: relative; width: 100%; }
+  .sheet img { display: block; width: 100%; height: auto; user-select: none; }
+  .sheet svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .cell { fill: transparent; cursor: pointer; }
+  .cell:hover { fill: rgba(43, 94, 167, .12); }
+  .mark { fill: none; pointer-events: none; }
+  .hint { font-size: 13px; color: #52606d; margin: 8px 16px 0; }
+  #toast {
+    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #1f2933; color: #fff;
+    padding: 10px 18px; border-radius: 8px; font-size: 14px; opacity: 0; transition: opacity .3s; pointer-events: none;
+  }
+  #toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Pasiekimų žingsneliai</h1>
+  <div class="group">
+    <span class="lbl">Vaikas:</span>
+    <input type="text" id="vardas" placeholder="Vardas">
+    <input type="text" id="pavarde" placeholder="Pavardė">
+    <input type="date" id="data" title="Data">
+  </div>
+  <div class="group">
+    <span class="lbl">Spalva:</span>
+    <span id="swatches"></span>
+    <input type="color" id="spalva" value="#e00000" title="Pasirinkti kitą spalvą">
+  </div>
+  <div class="group">
+    <span class="lbl">Linijos storis:</span>
+    <select id="storis">
+      <option value="6">Plona</option>
+      <option value="10" selected>Vidutinė</option>
+      <option value="16">Stora</option>
+    </select>
+  </div>
+  <div class="group">
+    <button class="btn" id="valytiLapa">Išvalyti lapą</button>
+    <button class="btn" id="naujas">Naujas vaikas</button>
+    <button class="btn primary" id="saugotiLapa">Išsaugoti šį lapą (JPG)</button>
+    <button class="btn primary" id="saugotiVisus">Išsaugoti visus 3 (JPG)</button>
+  </div>
+</header>
+
+<p class="hint">Paspauskite langelį, kad jį apvestumėte pasirinkta spalva. Paspaudus dar kartą ta pačia spalva, žymėjimas nuimamas, o kita spalva – pakeičiamas.</p>
+<div class="tabs" id="tabs"></div>
+<div class="sheet-wrap">
+  <div class="sheet" id="sheet">
+    <img id="img" alt="">
+    <svg id="svg" xmlns="http://www.w3.org/2000/svg"></svg>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script src="pasiekimu_duomenys.js"></script>
+<script>
+const SPALVOS = ['#e00000', '#f08c00', '#2f9e44', '#1c7ed6', '#9c36b5', '#000000'];
+const SAUGYKLA = 'pasiekimu_zingsneliai_v1';
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const KOMP_SPINDULYS = 28;   // kompetencijų rėmelių kampų apvalinimas
+const PADAS = 5;             // kiek išplėsti rėmelį, kad uždengtų juodą liniją
+
+const $ = id => document.getElementById(id);
+let aktyvus = 0;
+let spalva = SPALVOS[0];
+// zymes[lapoId][langelioIndeksas] = spalva
+let busena = { vardas: '', pavarde: '', data: '', storis: 10, zymes: {} };
+
+function siandien() {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+
+function issaugotiBusena() {
+  try { localStorage.setItem(SAUGYKLA, JSON.stringify(busena)); } catch (e) {}
+}
+
+function ikeltiBusena() {
+  try {
+    const s = JSON.parse(localStorage.getItem(SAUGYKLA));
+    if (s && s.zymes) busena = Object.assign(busena, s);
+  } catch (e) {}
+  LAPAI.forEach(l => { busena.zymes[l.id] = busena.zymes[l.id] || {}; });
+  if (!busena.data) busena.data = siandien();
+  $('vardas').value = busena.vardas;
+  $('pavarde').value = busena.pavarde;
+  $('data').value = busena.data;
+  $('storis').value = String(busena.storis);
+}
+
+function pranesti(tekstas) {
+  const t = $('toast');
+  t.textContent = tekstas;
+  t.classList.add('show');
+  clearTimeout(t._laikas);
+  t._laikas = setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+// ---------- Spalvos ----------
+function pieštiSpalvas() {
+  const box = $('swatches');
+  box.innerHTML = '';
+  SPALVOS.forEach(c => {
+    const b = document.createElement('button');
+    b.className = 'swatch' + (c === spalva ? ' active' : '');
+    b.style.background = c;
+    b.title = c;
+    b.onclick = () => nustatytiSpalva(c);
+    box.appendChild(b);
+  });
+}
+function nustatytiSpalva(c) {
+  spalva = c;
+  $('spalva').value = c;
+  pieštiSpalvas();
+}
+
+// ---------- Skirtukai ----------
+function pieštiSkirtukus() {
+  const tabs = $('tabs');
+  tabs.innerHTML = '';
+  LAPAI.forEach((l, i) => {
+    const b = document.createElement('button');
+    b.className = 'tab' + (i === aktyvus ? ' active' : '');
+    const n = Object.keys(busena.zymes[l.id]).length;
+    b.innerHTML = l.title.replace('Pasiekimų žingsneliai ', 'Žingsneliai ') + (n ? `<span class="cnt">${n}</span>` : '');
+    b.onclick = () => { aktyvus = i; pieštiLapa(); };
+    tabs.appendChild(b);
+  });
+}
+
+// ---------- Lapas ----------
+function pieštiLapa() {
+  const lapas = LAPAI[aktyvus];
+  const img = $('img'), svg = $('svg');
+  img.src = lapas.src;
+  img.alt = lapas.title;
+  svg.setAttribute('viewBox', `0 0 ${lapas.w} ${lapas.h}`);
+  svg.innerHTML = '';
+  const zymes = busena.zymes[lapas.id];
+  const storis = busena.storis;
+
+  lapas.cells.forEach((c, i) => {
+    const [x, y, w, h, komp] = c;
+    const r = komp ? KOMP_SPINDULYS : 0;
+    if (zymes[i]) {
+      const m = document.createElementNS(SVG_NS, 'rect');
+      m.setAttribute('class', 'mark');
+      m.setAttribute('x', x - PADAS + storis / 2);
+      m.setAttribute('y', y - PADAS + storis / 2);
+      m.setAttribute('width', w + 2 * PADAS - storis);
+      m.setAttribute('height', h + 2 * PADAS - storis);
+      m.setAttribute('rx', r);
+      m.setAttribute('stroke', zymes[i]);
+      m.setAttribute('stroke-width', storis);
+      svg.appendChild(m);
+    }
+    const a = document.createElementNS(SVG_NS, 'rect');
+    a.setAttribute('class', 'cell');
+    a.setAttribute('x', x); a.setAttribute('y', y);
+    a.setAttribute('width', w); a.setAttribute('height', h);
+    a.setAttribute('rx', r);
+    a.addEventListener('click', () => perjungti(i));
+    svg.appendChild(a);
+  });
+  pieštiSkirtukus();
+}
+
+function perjungti(i) {
+  const zymes = busena.zymes[LAPAI[aktyvus].id];
+  if (zymes[i] && zymes[i].toLowerCase() === spalva.toLowerCase()) delete zymes[i];
+  else zymes[i] = spalva;
+  issaugotiBusena();
+  pieštiLapa();
+}
+
+// ---------- Išsaugojimas JPG ----------
+function vaikoVardas() {
+  return [busena.vardas.trim(), busena.pavarde.trim()].filter(Boolean).join(' ');
+}
+
+function failoVardas(lapas) {
+  const vardas = vaikoVardas() || 'Vaikas';
+  const svarus = vardas.replace(/[\\/:*?"<>|]+/g, '').replace(/\s+/g, '_');
+  return `${svarus}_Pasiekimu_zingsneliai_${lapas.id}.jpg`;
+}
+
+function ikeltiPaveiksla(src) {
+  return new Promise((ok, klaida) => {
+    const im = new Image();
+    im.onload = () => ok(im);
+    im.onerror = klaida;
+    im.src = src;
+  });
+}
+
+async function sukurtiJpg(lapas) {
+  const im = await ikeltiPaveiksla(lapas.src);
+  const virsus = Math.round(lapas.h * 0.06);
+  const cv = document.createElement('canvas');
+  cv.width = lapas.w;
+  cv.height = lapas.h + virsus;
+  const ctx = cv.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, cv.width, cv.height);
+
+  // Antraštė su vaiko vardu ir data
+  const sriftas = Math.round(virsus * 0.45);
+  ctx.fillStyle = '#000';
+  ctx.textBaseline = 'middle';
+  ctx.font = `bold ${sriftas}px "Segoe UI", Arial, sans-serif`;
+  ctx.textAlign = 'left';
+  ctx.fillText('Vaikas: ' + (vaikoVardas() || '—'), Math.round(lapas.w * 0.03), virsus / 2);
+  ctx.font = `${sriftas}px "Segoe UI", Arial, sans-serif`;
+  ctx.textAlign = 'right';
+  const data = busena.data ? 'Data: ' + busena.data : '';
+  ctx.fillText([lapas.title, data].filter(Boolean).join('     '), Math.round(lapas.w * 0.97), virsus / 2);
+
+  ctx.drawImage(im, 0, virsus, lapas.w, lapas.h);
+
+  // Pažymėti langeliai
+  const zymes = busena.zymes[lapas.id];
+  const storis = busena.storis;
+  Object.keys(zymes).forEach(k => {
+    const [x, y, w, h, komp] = lapas.cells[k];
+    ctx.strokeStyle = zymes[k];
+    ctx.lineWidth = storis;
+    ctx.beginPath();
+    const rx = x - PADAS + storis / 2, ry = y - PADAS + storis / 2 + virsus;
+    const rw = w + 2 * PADAS - storis, rh = h + 2 * PADAS - storis;
+    if (ctx.roundRect) ctx.roundRect(rx, ry, rw, rh, komp ? KOMP_SPINDULYS : 0);
+    else ctx.rect(rx, ry, rw, rh);
+    ctx.stroke();
+  });
+
+  return new Promise(ok => cv.toBlob(ok, 'image/jpeg', 0.92));
+}
+
+function atsisiusti(blob, vardas) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = vardas;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+function patikrintiVarda() {
+  if (vaikoVardas()) return true;
+  return confirm('Neįvestas vaiko vardas ir pavardė. Ar vis tiek išsaugoti?');
+}
+
+async function saugoti(lapai) {
+  if (!patikrintiVarda()) return;
+  pranesti('Ruošiami failai…');
+  for (const l of lapai) {
+    const blob = await sukurtiJpg(l);
+    atsisiusti(blob, failoVardas(l));
+    await new Promise(r => setTimeout(r, 400));
+  }
+  pranesti(lapai.length > 1 ? 'Išsaugoti visi lapai (žr. „Atsisiuntimai“)' : 'Lapas išsaugotas (žr. „Atsisiuntimai“)');
+}
+
+// ---------- Valdikliai ----------
+['vardas', 'pavarde', 'data'].forEach(id => {
+  $(id).addEventListener('input', e => { busena[id] = e.target.value; issaugotiBusena(); });
+});
+$('spalva').addEventListener('input', e => nustatytiSpalva(e.target.value));
+$('storis').addEventListener('change', e => { busena.storis = Number(e.target.value); issaugotiBusena(); pieštiLapa(); });
+$('valytiLapa').onclick = () => {
+  if (!confirm('Nuimti visus žymėjimus šiame lape?')) return;
+  busena.zymes[LAPAI[aktyvus].id] = {};
+  issaugotiBusena(); pieštiLapa();
+};
+$('naujas').onclick = () => {
+  if (!confirm('Pradėti naują vaiką? Bus išvalytas vardas ir visi žymėjimai visuose lapuose.')) return;
+  busena.vardas = busena.pavarde = '';
+  busena.data = siandien();
+  LAPAI.forEach(l => { busena.zymes[l.id] = {}; });
+  $('vardas').value = $('pavarde').value = '';
+  $('data').value = busena.data;
+  issaugotiBusena(); pieštiLapa();
+};
+$('saugotiLapa').onclick = () => saugoti([LAPAI[aktyvus]]);
+$('saugotiVisus').onclick = () => saugoti(LAPAI);
+
+ikeltiBusena();
+pieštiSpalvas();
+pieštiLapa();
+</script>
+</body>
+</html>
