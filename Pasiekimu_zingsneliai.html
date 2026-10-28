@@ -126,7 +126,7 @@ import { firebaseConfig } from './firebase-config.js';
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-app.js';
 import { getAuth, onAuthStateChanged, signInWithPopup, signOut, GoogleAuthProvider }
   from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-auth.js';
-import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, onSnapshot,
+import { initializeFirestore, memoryLocalCache, clearIndexedDbPersistence, collection, doc, onSnapshot,
          setDoc, updateDoc, deleteDoc, deleteField, writeBatch, serverTimestamp, FieldPath }
   from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-firestore.js';
 
@@ -150,14 +150,14 @@ let vartotojas = null;
 let atsisakytiStebejimo = null;
 
 const sukonfiguruota = !firebaseConfig.apiKey.startsWith('ĮRAŠYKITE');
-let auth, db, vaikuKolekcija;
+let auth, db, vaikuKolekcija, isvalytaSenaKopija;
 if (sukonfiguruota) {
   const app = initializeApp(firebaseConfig);
   auth = getAuth(app);
-  // Vietinė kopija leidžia dirbti ir trumpam dingus internetui – pakeitimai nusiųsti vėliau
-  db = initializeFirestore(app, {
-    localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
-  });
+  // Duomenys laikomi tik atmintyje, kol puslapis atidarytas – naršyklėje nieko nelieka
+  db = initializeFirestore(app, { localCache: memoryLocalCache() });
+  // Ištriname kopiją, kurią naršyklėje paliko ankstesnė versija (turi įvykti prieš pirmą užklausą)
+  isvalytaSenaKopija = clearIndexedDbPersistence(db).catch(e => console.warn(e));
   vaikuKolekcija = collection(db, 'vaikai');
 }
 
@@ -180,6 +180,14 @@ function rodytiUzdanga(tekstas, { prisijungti = false, kitaPaskyra = false } = {
   $('prisijungti').hidden = !prisijungti;
   $('kitaPaskyra').hidden = !kitaPaskyra;
   $('uzdanga').hidden = false;
+}
+
+// Atsijungus pašaliname vaikų duomenis iš atminties ir puslapio
+function isvalytiEkrana() {
+  vaikai = {};
+  vaikas = null;
+  ['vaikai', 'tabs', 'svg', 'elpastas'].forEach(k => { $(k).innerHTML = ''; });
+  ['vardas', 'pavarde', 'data'].forEach(k => { $(k).value = ''; });
 }
 
 function klaidaDB(e) {
@@ -242,8 +250,12 @@ function pradetiStebeti() {
 }
 
 // Vienkartinis duomenų perkėlimas iš ankstesnės versijos, kuri saugojo naršyklėje
+function istrintiSenusDuomenis() {
+  SENOS_SAUGYKLOS.forEach(k => localStorage.removeItem(k));
+}
+
 function perkeltiIsNarsykles() {
-  if (localStorage.getItem(PERKELTA)) return false;
+  if (localStorage.getItem(PERKELTA)) { istrintiSenusDuomenis(); return false; }
   let rasti = [];
   try {
     const v2 = JSON.parse(localStorage.getItem(SENOS_SAUGYKLOS[0]));
@@ -254,15 +266,18 @@ function perkeltiIsNarsykles() {
   rasti = rasti.filter(([, v]) => (v.vardas || '').trim() || (v.pavarde || '').trim()
                                  || Object.values(v.zymes || {}).some(z => Object.keys(z).length));
   localStorage.setItem(PERKELTA, '1');
-  if (!rasti.length) return false;
-  if (!confirm(`Šioje naršyklėje rasta ${rasti.length} vaik. duomenų iš ankstesnės versijos. Perkelti juos į bendrą duomenų bazę?`)) return false;
+  if (!rasti.length) { istrintiSenusDuomenis(); return false; }
+  if (!confirm(`Šioje naršyklėje rasta ${rasti.length} vaik. duomenų iš ankstesnės versijos. Perkelti juos į bendrą duomenų bazę?\n\nJei atsisakysite, jie bus ištrinti iš šios naršyklės.`)) {
+    istrintiSenusDuomenis();
+    return false;
+  }
   const batch = writeBatch(db);
   rasti.forEach(([id, v]) => {
     batch.set(doc(vaikuKolekcija, 'senas_' + id), Object.assign(
       naujoVaikoDuomenys({ vardas: v.vardas || '', pavarde: v.pavarde || '', data: v.data || siandien(), zymes: v.zymes }),
       { sukurta: serverTimestamp(), keista: serverTimestamp(), keite: vartotojas.email }));
   });
-  batch.commit().then(() => pranesti('Duomenys perkelti')).catch(klaidaDB);
+  batch.commit().then(() => { istrintiSenusDuomenis(); pranesti('Duomenys perkelti'); }).catch(klaidaDB);
   return true;
 }
 
@@ -440,11 +455,10 @@ async function sukurtiJpg(lapas) {
   ctx.textBaseline = 'middle';
   ctx.font = `bold ${sriftas}px "Segoe UI", Arial, sans-serif`;
   ctx.textAlign = 'left';
-  ctx.fillText('Vaikas: ' + (vaikoVardas() || '—'), Math.round(lapas.w * 0.03), virsus / 2);
+  ctx.fillText(vaikoVardas(), Math.round(lapas.w * 0.03), virsus / 2);
   ctx.font = `${sriftas}px "Segoe UI", Arial, sans-serif`;
   ctx.textAlign = 'right';
-  const data = vaikas.data ? 'Data: ' + vaikas.data : '';
-  ctx.fillText([lapas.title, data].filter(Boolean).join('     '), Math.round(lapas.w * 0.97), virsus / 2);
+  ctx.fillText(vaikas.data ? 'Data: ' + vaikas.data : '', Math.round(lapas.w * 0.97), virsus / 2);
 
   ctx.drawImage(im, 0, virsus, lapas.w, lapas.h);
 
@@ -550,12 +564,13 @@ if (!sukonfiguruota) {
     if (atsisakytiStebejimo) { atsisakytiStebejimo(); atsisakytiStebejimo = null; }
     vartotojas = u;
     if (!u) {
+      isvalytiEkrana();
       rodytiUzdanga('Prisijunkite Google paskyra, kuriai suteikta prieiga.', { prisijungti: true });
       return;
     }
     $('elpastas').textContent = u.email;
     rodytiUzdanga('Įkeliami duomenys…');
-    pradetiStebeti();
+    isvalytaSenaKopija.then(() => { if (vartotojas === u && !atsisakytiStebejimo) pradetiStebeti(); });
   });
 }
 </script>
