@@ -1,0 +1,20 @@
+rules_version = '2';
+
+// Prieiga tik dviem žmonėms. Įrašykite jų Google paskyrų el. pašto adresus
+// ir nukopijuokite šį failą į Firebase konsolę: Firestore Database → Rules → Publish.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function leidziama() {
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && request.auth.token.email in [
+          'pirmas.zmogus@gmail.com',
+          'antras.zmogus@gmail.com'
+        ];
+    }
+
+    match /vaikai/{vaikoId} {
+      allow read, write: if leidziama();
+    }
+  }
+}

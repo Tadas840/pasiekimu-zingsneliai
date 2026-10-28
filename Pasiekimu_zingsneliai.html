@@ -27,6 +27,7 @@
   .swatch.active { box-shadow: 0 0 0 2px #1f2933; }
   input[type=color] { width: 34px; height: 30px; border: none; padding: 0; background: none; cursor: pointer; }
   select { font: inherit; font-size: 14px; padding: 5px; border: 1px solid var(--border); border-radius: 6px; }
+  #vaikai { min-width: 180px; }
   button.btn {
     font: inherit; font-size: 14px; padding: 7px 12px; border-radius: 6px; cursor: pointer;
     border: 1px solid var(--border); background: #fff;
@@ -34,6 +35,7 @@
   button.btn:hover { background: #eef2f7; }
   button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
   button.primary:hover { background: #224b86; }
+  .vartotojas { margin-left: auto; font-size: 13px; color: #52606d; }
   .tabs { display: flex; gap: 6px; padding: 12px 16px 0; }
   .tab {
     font: inherit; font-size: 15px; padding: 8px 16px; border: 1px solid var(--border); border-bottom: none;
@@ -49,6 +51,13 @@
   .cell:hover { fill: rgba(43, 94, 167, .12); }
   .mark { fill: none; pointer-events: none; }
   .hint { font-size: 13px; color: #52606d; margin: 8px 16px 0; }
+  #uzdanga {
+    position: fixed; inset: 0; z-index: 20; background: var(--bg);
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; text-align: center; padding: 16px;
+  }
+  #uzdanga[hidden] { display: none; }
+  #uzdanga h2 { margin: 0; color: var(--accent); }
+  #uzdangosTekstas { max-width: 460px; color: #52606d; }
   #toast {
     position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #1f2933; color: #fff;
     padding: 10px 18px; border-radius: 8px; font-size: 14px; opacity: 0; transition: opacity .3s; pointer-events: none;
@@ -61,6 +70,11 @@
   <h1>Pasiekimų žingsneliai</h1>
   <div class="group">
     <span class="lbl">Vaikas:</span>
+    <select id="vaikai" title="Pasirinkti vaiką"></select>
+    <button class="btn" id="naujas" title="Pridėti naują vaiką">+ Naujas</button>
+    <button class="btn" id="trinti" title="Ištrinti pasirinktą vaiką">Ištrinti</button>
+  </div>
+  <div class="group">
     <input type="text" id="vardas" placeholder="Vardas">
     <input type="text" id="pavarde" placeholder="Pavardė">
     <input type="date" id="data" title="Data">
@@ -80,13 +94,16 @@
   </div>
   <div class="group">
     <button class="btn" id="valytiLapa">Išvalyti lapą</button>
-    <button class="btn" id="naujas">Naujas vaikas</button>
     <button class="btn primary" id="saugotiLapa">Išsaugoti šį lapą (JPG)</button>
     <button class="btn primary" id="saugotiVisus">Išsaugoti visus 3 (JPG)</button>
   </div>
+  <div class="group vartotojas">
+    <span id="elpastas"></span>
+    <button class="btn" id="atsijungti">Atsijungti</button>
+  </div>
 </header>
 
-<p class="hint">Paspauskite langelį, kad jį apvestumėte pasirinkta spalva. Paspaudus dar kartą ta pačia spalva, žymėjimas nuimamas, o kita spalva – pakeičiamas.</p>
+<p class="hint">Paspauskite langelį, kad jį apvestumėte pasirinkta spalva. Paspaudus dar kartą ta pačia spalva, žymėjimas nuimamas, o kita spalva – pakeičiamas. Kiekvieno vaiko žymėjimai saugomi bendroje duomenų bazėje – vaiką pasirinkite sąraše viršuje.</p>
 <div class="tabs" id="tabs"></div>
 <div class="sheet-wrap">
   <div class="sheet" id="sheet">
@@ -94,12 +111,29 @@
     <svg id="svg" xmlns="http://www.w3.org/2000/svg"></svg>
   </div>
 </div>
+
+<div id="uzdanga">
+  <h2>Pasiekimų žingsneliai</h2>
+  <div id="uzdangosTekstas">Jungiamasi…</div>
+  <button class="btn primary" id="prisijungti" hidden>Prisijungti su Google</button>
+  <button class="btn" id="kitaPaskyra" hidden>Prisijungti kita paskyra</button>
+</div>
 <div id="toast"></div>
 
 <script src="pasiekimu_duomenys.js"></script>
-<script>
+<script type="module">
+import { firebaseConfig } from './firebase-config.js';
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-app.js';
+import { getAuth, onAuthStateChanged, signInWithPopup, signOut, GoogleAuthProvider }
+  from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-auth.js';
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, onSnapshot,
+         setDoc, updateDoc, deleteDoc, deleteField, writeBatch, serverTimestamp, FieldPath }
+  from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-firestore.js';
+
 const SPALVOS = ['#e00000', '#f08c00', '#2f9e44', '#1c7ed6', '#9c36b5', '#000000'];
-const SAUGYKLA = 'pasiekimu_zingsneliai_v1';
+const NUSTATYMAI = 'pasiekimu_zingsneliai_nustatymai';
+const SENOS_SAUGYKLOS = ['pasiekimu_zingsneliai_v2', 'pasiekimu_zingsneliai_v1'];
+const PERKELTA = 'pasiekimu_zingsneliai_perkelta';
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const KOMP_SPINDULYS = 28;   // kompetencijų rėmelių kampų apvalinimas
 const PADAS = 5;             // kiek išplėsti rėmelį, kad uždengtų juodą liniją
@@ -107,29 +141,174 @@ const PADAS = 5;             // kiek išplėsti rėmelį, kad uždengtų juodą 
 const $ = id => document.getElementById(id);
 let aktyvus = 0;
 let spalva = SPALVOS[0];
-// zymes[lapoId][langelioIndeksas] = spalva
-let busena = { vardas: '', pavarde: '', data: '', storis: 10, zymes: {} };
+// Asmeniniai nustatymai saugomi naršyklėje, vaikų duomenys – Firestore
+let nustatymai = { storis: 10, aktyvusVaikas: null };
+// vaikai[vaikoId] = { vardas, pavarde, data, zymes: { [lapoId]: { [langelioIndeksas]: spalva } } }
+let vaikai = {};
+let vaikas = null;   // šiuo metu pasirinkto vaiko objektas
+let vartotojas = null;
+let atsisakytiStebejimo = null;
+
+const sukonfiguruota = !firebaseConfig.apiKey.startsWith('ĮRAŠYKITE');
+let auth, db, vaikuKolekcija;
+if (sukonfiguruota) {
+  const app = initializeApp(firebaseConfig);
+  auth = getAuth(app);
+  // Vietinė kopija leidžia dirbti ir trumpam dingus internetui – pakeitimai nusiųsti vėliau
+  db = initializeFirestore(app, {
+    localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
+  });
+  vaikuKolekcija = collection(db, 'vaikai');
+}
 
 function siandien() {
   const d = new Date();
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 }
 
-function issaugotiBusena() {
-  try { localStorage.setItem(SAUGYKLA, JSON.stringify(busena)); } catch (e) {}
+function issaugotiNustatymus() {
+  try { localStorage.setItem(NUSTATYMAI, JSON.stringify(nustatymai)); } catch (e) {}
 }
 
-function ikeltiBusena() {
+function ikeltiNustatymus() {
+  try { Object.assign(nustatymai, JSON.parse(localStorage.getItem(NUSTATYMAI))); } catch (e) {}
+  $('storis').value = String(nustatymai.storis);
+}
+
+function rodytiUzdanga(tekstas, { prisijungti = false, kitaPaskyra = false } = {}) {
+  $('uzdangosTekstas').textContent = tekstas;
+  $('prisijungti').hidden = !prisijungti;
+  $('kitaPaskyra').hidden = !kitaPaskyra;
+  $('uzdanga').hidden = false;
+}
+
+function klaidaDB(e) {
+  console.error(e);
+  pranesti(e.code === 'permission-denied' ? 'Neturite teisės keisti duomenų' : 'Nepavyko išsaugoti: ' + e.message);
+}
+
+// ---------- Duomenų bazė ----------
+function papildytiLapus(v) {
+  v.zymes = v.zymes || {};
+  LAPAI.forEach(l => { v.zymes[l.id] = v.zymes[l.id] || {}; });
+  return v;
+}
+
+function naujoVaikoDuomenys(duomenys) {
+  return papildytiLapus(Object.assign({ vardas: '', pavarde: '', data: siandien(), zymes: {} }, duomenys));
+}
+
+function zymaKeitimo() {
+  return ['keista', serverTimestamp(), 'keite', vartotojas.email];
+}
+
+// Keičiame tik konkrečius laukus, kad du žmonės vienu metu neperrašytų vienas kito pakeitimų
+function atnaujintiVaika(id, ...laukaiIrReiksmes) {
+  updateDoc(doc(vaikuKolekcija, id), ...laukaiIrReiksmes, ...zymaKeitimo()).catch(klaidaDB);
+}
+
+function sukurtiVaika(duomenys) {
+  const ref = doc(vaikuKolekcija);
+  const v = naujoVaikoDuomenys(duomenys);
+  vaikai[ref.id] = v;
+  setDoc(ref, Object.assign({}, v, { sukurta: serverTimestamp(), keista: serverTimestamp(), keite: vartotojas.email }))
+    .catch(klaidaDB);
+  return ref.id;
+}
+
+function pradetiStebeti() {
+  let pirmasKartas = true;
+  atsisakytiStebejimo = onSnapshot(vaikuKolekcija, snap => {
+    vaikai = {};
+    snap.forEach(d => { vaikai[d.id] = papildytiLapus(d.data()); });
+    if (pirmasKartas) {
+      pirmasKartas = false;
+      $('uzdanga').hidden = true;
+      if (perkeltiIsNarsykles()) return;   // perkėlus ateis naujas snapshot
+    }
+    if (!vaikai[nustatymai.aktyvusVaikas]) {
+      nustatymai.aktyvusVaikas = pirmasPagalAbecele() || sukurtiVaika();
+    }
+    pasirinktiVaika(nustatymai.aktyvusVaikas);
+  }, e => {
+    console.error(e);
+    if (e.code === 'permission-denied') {
+      rodytiUzdanga(`Paskyra ${vartotojas.email} neturi prieigos prie duomenų. Paprašykite, kad ji būtų įtraukta į leidžiamų sąrašą.`,
+                    { kitaPaskyra: true });
+    } else {
+      rodytiUzdanga('Nepavyko prisijungti prie duomenų bazės: ' + e.message, { kitaPaskyra: true });
+    }
+  });
+}
+
+// Vienkartinis duomenų perkėlimas iš ankstesnės versijos, kuri saugojo naršyklėje
+function perkeltiIsNarsykles() {
+  if (localStorage.getItem(PERKELTA)) return false;
+  let rasti = [];
   try {
-    const s = JSON.parse(localStorage.getItem(SAUGYKLA));
-    if (s && s.zymes) busena = Object.assign(busena, s);
+    const v2 = JSON.parse(localStorage.getItem(SENOS_SAUGYKLOS[0]));
+    const v1 = JSON.parse(localStorage.getItem(SENOS_SAUGYKLOS[1]));
+    if (v2 && v2.vaikai) rasti = Object.entries(v2.vaikai);
+    else if (v1 && v1.zymes) rasti = [['v1', v1]];
   } catch (e) {}
-  LAPAI.forEach(l => { busena.zymes[l.id] = busena.zymes[l.id] || {}; });
-  if (!busena.data) busena.data = siandien();
-  $('vardas').value = busena.vardas;
-  $('pavarde').value = busena.pavarde;
-  $('data').value = busena.data;
-  $('storis').value = String(busena.storis);
+  rasti = rasti.filter(([, v]) => (v.vardas || '').trim() || (v.pavarde || '').trim()
+                                 || Object.values(v.zymes || {}).some(z => Object.keys(z).length));
+  localStorage.setItem(PERKELTA, '1');
+  if (!rasti.length) return false;
+  if (!confirm(`Šioje naršyklėje rasta ${rasti.length} vaik. duomenų iš ankstesnės versijos. Perkelti juos į bendrą duomenų bazę?`)) return false;
+  const batch = writeBatch(db);
+  rasti.forEach(([id, v]) => {
+    batch.set(doc(vaikuKolekcija, 'senas_' + id), Object.assign(
+      naujoVaikoDuomenys({ vardas: v.vardas || '', pavarde: v.pavarde || '', data: v.data || siandien(), zymes: v.zymes }),
+      { sukurta: serverTimestamp(), keista: serverTimestamp(), keite: vartotojas.email }));
+  });
+  batch.commit().then(() => pranesti('Duomenys perkelti')).catch(klaidaDB);
+  return true;
+}
+
+// ---------- Vaikai ----------
+function vaikoPavadinimas(v) {
+  return [v.vardas.trim(), v.pavarde.trim()].filter(Boolean).join(' ') || '(be vardo)';
+}
+
+function zymiuSkaicius(v) {
+  return Object.values(v.zymes).reduce((s, z) => s + Object.keys(z).length, 0);
+}
+
+function surikiuotiVaikai() {
+  return Object.entries(vaikai).sort((a, b) => vaikoPavadinimas(a[1]).localeCompare(vaikoPavadinimas(b[1]), 'lt'));
+}
+
+function pirmasPagalAbecele() {
+  const s = surikiuotiVaikai();
+  return s.length ? s[0][0] : null;
+}
+
+function pieštiVaikuSarasa() {
+  const sel = $('vaikai');
+  sel.innerHTML = '';
+  surikiuotiVaikai().forEach(([id, v]) => {
+    const o = document.createElement('option');
+    o.value = id;
+    o.textContent = `${vaikoPavadinimas(v)} (${zymiuSkaicius(v)})`;
+    o.selected = id === nustatymai.aktyvusVaikas;
+    sel.appendChild(o);
+  });
+}
+
+function pasirinktiVaika(id) {
+  nustatymai.aktyvusVaikas = id;
+  vaikas = vaikai[id];
+  issaugotiNustatymus();
+  // Neperrašome laukelio, kuriame vartotojas šiuo metu rašo
+  ['vardas', 'pavarde', 'data'].forEach(k => {
+    if (document.activeElement !== $(k)) $(k).value = vaikas[k];
+  });
+  pieštiLapa();
+}
+
+function arTuscias(v) {
+  return !v.vardas.trim() && !v.pavarde.trim() && zymiuSkaicius(v) === 0;
 }
 
 function pranesti(tekstas) {
@@ -166,7 +345,7 @@ function pieštiSkirtukus() {
   LAPAI.forEach((l, i) => {
     const b = document.createElement('button');
     b.className = 'tab' + (i === aktyvus ? ' active' : '');
-    const n = Object.keys(busena.zymes[l.id]).length;
+    const n = Object.keys(vaikas.zymes[l.id]).length;
     b.innerHTML = l.title.replace('Pasiekimų žingsneliai ', 'Žingsneliai ') + (n ? `<span class="cnt">${n}</span>` : '');
     b.onclick = () => { aktyvus = i; pieštiLapa(); };
     tabs.appendChild(b);
@@ -177,12 +356,12 @@ function pieštiSkirtukus() {
 function pieštiLapa() {
   const lapas = LAPAI[aktyvus];
   const img = $('img'), svg = $('svg');
-  img.src = lapas.src;
+  if (img.getAttribute('src') !== lapas.src) img.src = lapas.src;
   img.alt = lapas.title;
   svg.setAttribute('viewBox', `0 0 ${lapas.w} ${lapas.h}`);
   svg.innerHTML = '';
-  const zymes = busena.zymes[lapas.id];
-  const storis = busena.storis;
+  const zymes = vaikas.zymes[lapas.id];
+  const storis = nustatymai.storis;
 
   lapas.cells.forEach((c, i) => {
     const [x, y, w, h, komp] = c;
@@ -208,19 +387,26 @@ function pieštiLapa() {
     svg.appendChild(a);
   });
   pieštiSkirtukus();
+  pieštiVaikuSarasa();
 }
 
 function perjungti(i) {
-  const zymes = busena.zymes[LAPAI[aktyvus].id];
-  if (zymes[i] && zymes[i].toLowerCase() === spalva.toLowerCase()) delete zymes[i];
-  else zymes[i] = spalva;
-  issaugotiBusena();
+  const lapoId = LAPAI[aktyvus].id;
+  const zymes = vaikas.zymes[lapoId];
+  const kelias = new FieldPath('zymes', lapoId, String(i));
+  if (zymes[i] && zymes[i].toLowerCase() === spalva.toLowerCase()) {
+    delete zymes[i];
+    atnaujintiVaika(nustatymai.aktyvusVaikas, kelias, deleteField());
+  } else {
+    zymes[i] = spalva;
+    atnaujintiVaika(nustatymai.aktyvusVaikas, kelias, spalva);
+  }
   pieštiLapa();
 }
 
 // ---------- Išsaugojimas JPG ----------
 function vaikoVardas() {
-  return [busena.vardas.trim(), busena.pavarde.trim()].filter(Boolean).join(' ');
+  return [vaikas.vardas.trim(), vaikas.pavarde.trim()].filter(Boolean).join(' ');
 }
 
 function failoVardas(lapas) {
@@ -257,14 +443,14 @@ async function sukurtiJpg(lapas) {
   ctx.fillText('Vaikas: ' + (vaikoVardas() || '—'), Math.round(lapas.w * 0.03), virsus / 2);
   ctx.font = `${sriftas}px "Segoe UI", Arial, sans-serif`;
   ctx.textAlign = 'right';
-  const data = busena.data ? 'Data: ' + busena.data : '';
+  const data = vaikas.data ? 'Data: ' + vaikas.data : '';
   ctx.fillText([lapas.title, data].filter(Boolean).join('     '), Math.round(lapas.w * 0.97), virsus / 2);
 
   ctx.drawImage(im, 0, virsus, lapas.w, lapas.h);
 
   // Pažymėti langeliai
-  const zymes = busena.zymes[lapas.id];
-  const storis = busena.storis;
+  const zymes = vaikas.zymes[lapas.id];
+  const storis = nustatymai.storis;
   Object.keys(zymes).forEach(k => {
     const [x, y, w, h, komp] = lapas.cells[k];
     ctx.strokeStyle = zymes[k];
@@ -308,31 +494,70 @@ async function saugoti(lapai) {
 }
 
 // ---------- Valdikliai ----------
-['vardas', 'pavarde', 'data'].forEach(id => {
-  $(id).addEventListener('input', e => { busena[id] = e.target.value; issaugotiBusena(); });
+['vardas', 'pavarde', 'data'].forEach(k => {
+  $(k).addEventListener('input', e => {
+    vaikas[k] = e.target.value;
+    atnaujintiVaika(nustatymai.aktyvusVaikas, k, e.target.value);
+    pieštiVaikuSarasa();
+  });
 });
 $('spalva').addEventListener('input', e => nustatytiSpalva(e.target.value));
-$('storis').addEventListener('change', e => { busena.storis = Number(e.target.value); issaugotiBusena(); pieštiLapa(); });
+$('storis').addEventListener('change', e => { nustatymai.storis = Number(e.target.value); issaugotiNustatymus(); pieštiLapa(); });
 $('valytiLapa').onclick = () => {
   if (!confirm('Nuimti visus žymėjimus šiame lape?')) return;
-  busena.zymes[LAPAI[aktyvus].id] = {};
-  issaugotiBusena(); pieštiLapa();
+  const lapoId = LAPAI[aktyvus].id;
+  vaikas.zymes[lapoId] = {};
+  atnaujintiVaika(nustatymai.aktyvusVaikas, new FieldPath('zymes', lapoId), {});
+  pieštiLapa();
 };
+$('vaikai').addEventListener('change', e => pasirinktiVaika(e.target.value));
 $('naujas').onclick = () => {
-  if (!confirm('Pradėti naują vaiką? Bus išvalytas vardas ir visi žymėjimai visuose lapuose.')) return;
-  busena.vardas = busena.pavarde = '';
-  busena.data = siandien();
-  LAPAI.forEach(l => { busena.zymes[l.id] = {}; });
-  $('vardas').value = $('pavarde').value = '';
-  $('data').value = busena.data;
-  issaugotiBusena(); pieštiLapa();
+  // Jei dabartinis vaikas dar tuščias – naujo nekuriame, tik leidžiame įvesti vardą
+  if (!arTuscias(vaikas)) pasirinktiVaika(sukurtiVaika());
+  $('vardas').focus();
+};
+$('trinti').onclick = () => {
+  if (!confirm(`Ištrinti vaiką „${vaikoPavadinimas(vaikas)}“ ir visus jo žymėjimus? To atšaukti nebus galima.`)) return;
+  const id = nustatymai.aktyvusVaikas;
+  delete vaikai[id];
+  deleteDoc(doc(vaikuKolekcija, id)).then(() => pranesti('Vaikas ištrintas')).catch(klaidaDB);
+  pasirinktiVaika(pirmasPagalAbecele() || sukurtiVaika());
 };
 $('saugotiLapa').onclick = () => saugoti([LAPAI[aktyvus]]);
 $('saugotiVisus').onclick = () => saugoti(LAPAI);
 
-ikeltiBusena();
+// ---------- Prisijungimas ----------
+function prisijungti() {
+  const tiekejas = new GoogleAuthProvider();
+  tiekejas.setCustomParameters({ prompt: 'select_account' });
+  signInWithPopup(auth, tiekejas).catch(e => {
+    if (e.code !== 'auth/popup-closed-by-user' && e.code !== 'auth/cancelled-popup-request') {
+      rodytiUzdanga('Nepavyko prisijungti: ' + e.message, { prisijungti: true });
+    }
+  });
+}
+$('prisijungti').onclick = prisijungti;
+$('kitaPaskyra').onclick = () => signOut(auth);
+$('atsijungti').onclick = () => signOut(auth);
+
+ikeltiNustatymus();
 pieštiSpalvas();
-pieštiLapa();
+
+if (!sukonfiguruota) {
+  rodytiUzdanga('Duomenų bazė dar nesukonfigūruota: užpildykite failą firebase-config.js (žr. README).');
+} else {
+  onAuthStateChanged(auth, u => {
+    if (atsisakytiStebejimo) { atsisakytiStebejimo(); atsisakytiStebejimo = null; }
+    vartotojas = u;
+    if (!u) {
+      rodytiUzdanga('Prisijunkite Google paskyra, kuriai suteikta prieiga.', { prisijungti: true });
+      return;
+    }
+    $('elpastas').textContent = u.email;
+    rodytiUzdanga('Įkeliami duomenys…');
+    pradetiStebeti();
+  });
+}
 </script>
 </body>
 </html>
